@@ -16,8 +16,8 @@ import time
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-size = comm.Get_size()
-assert size>1, 'At least 2 MPI ranks required'
+numWorkers = comm.Get_size()
+assert numWorkers>1, 'At least 2 MPI ranks required'
 
 
 # Instantiate the parser
@@ -49,6 +49,9 @@ Xstart = 20
 Ystart = 20
 roi = [Ystart,Ystart+N2,Xstart,Xstart+M2]
 
+# Photon conversion
+ADU = 325
+
 # Extracting the data 
 ds = ps.DataSource('exp='+exp_name+':run='+str(run)+':idx')
 run = ds.runs().next()
@@ -62,23 +65,27 @@ eventTotal = len(times)
 
 # Have to enter iterations manually for now
 it  = 5000
-# calculate array size per core
-#N = eventTotal/int(size) + 1
-N = it/int(size) + 1
-#print('Will run: '+ str(it)' iterations with a number of tasks per core of: '+ str(N) )
-print( 'iterations with a number of tasks per core of: '+ str(N) )
 
-speckle_patterns =[]
+# calculate array size per core and partition arrays
+N = it/int(numWorkers) + 1
+print('Runing: '+ str(it) + ' iterations with a number of tasks per core of: '+ str(N) )
 
-evt = run.event(times[0])           
+assert( len(times) >= numWorkers )
 
-#for i in range(len(times)):
-for i in range(35000):
-    evt = run.event(times[i])
-    calib = det.raw(evt) - det.pedestals(evt)
-    speckle_patterns.append(calib)
+allJobs = np.arange(len(times))
+jobChunks = np.array_split(allJobs, numWorkers)
+myChunk = jobChunks[rank]
+myJobs = allJobs[myChunk[0]:myChunk[-1]+1]
 
-speckle_patterns = np.asarray(speckle_patterns)
+f = h5.File('parallel_speckle.hdf5', 'w', driver='mpio', comm=MPI.COMM_WORLD)
+dset = f.create_dataset('speckle_pattern', (numWorkers,), dtype='i')
+
+for i in range(len(times)):
+    if i % numWorkers == rank:
+        evt = run.event(times[i])
+        dset[i]  = det.raw(evt) - det.pedestals(evt)       
+
+f.close() 
 
 
 # Discriminate shots based on k_average and crop data
@@ -89,7 +96,7 @@ k_av = 0.08
 for zz in range(35000):
     Essai = speckle_patterns[zz]
     Essai[Essai<20] = 0
-    k_ave = Essai.sum()/(40*40)/325
+    k_ave = Essai.sum()/(N2*M2)/ADU
     if k_ave < k_av:
         continue
     else:
@@ -120,23 +127,14 @@ xIm = np.linspace(0,M2-1,M2)
 yIm = np.linspace(0,N2-1,N2)
 xIm,yIm = np.meshgrid(xIm,yIm)
 
-# global iterator
-n = -1
-
-# local iterator
-n2 = 0
-
 ###### let's start the main droplet loop over shots ######
 
 tic = time.clock()
 
 for jj in range(it):
      
-    # increment iterator
-    n += 1
-
     # parallel processing over "good" events
-    if n%size!=rank: continue
+    if (jj+1)%size!=rank: continue
     
     mask = Data[jj]>0
     label_im, nb_labels = ndimage.label(mask) 
@@ -160,10 +158,10 @@ for jj in range(it):
         dropGuess[n2,:,:] += drop.dropGuess
         # label this event as good
         
-    eventNums[n2] = jj
+    eventNums[jj] = jj
     toc = time.clock()
     print('time elapsed for this shot: ' +str(toc - tic))
-    n2+=1
+    
         
 # How to tell the log that this process is done
 print('Process '+ str(rank)+' finished.')
