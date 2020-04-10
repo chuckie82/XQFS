@@ -78,10 +78,9 @@ myChunk = jobChunks[rank]
 myJobs = allJobs[myChunk[0]:myChunk[-1]+1]
 
 f = h5.File('parallel_speckle.hdf5', 'w', driver='mpio', comm=MPI.COMM_WORLD)
-dset = f.create_dataset('speckle_pattern', (len(times),90,90), dtype='i')
+dset = f.create_dataset('speckle_pattern', (len(times),90,90), dtype='float32')
 
-for i in range(len(times)):
-    if i % numWorkers == rank:
+for i in range(myJobs):
         evt = run.event(times[i])
         dset[i]  = det.raw(evt) - det.pedestals(evt)
         #dset.append(det.raw(evt) - det.pedestals(evt)) ?
